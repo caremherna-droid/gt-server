@@ -401,10 +401,27 @@ export const uploadGameZipLocal = async (req, res) => {
     });
 
     // Create public/games directory if it doesn't exist
+    // Note: In serverless environments (like Vercel), filesystem is read-only except /tmp
+    // This directory is mainly for development/local use
     const publicGamesDir = path.join(__dirname, "../../public/games");
-    if (!fs.existsSync(publicGamesDir)) {
-      fs.mkdirSync(publicGamesDir, { recursive: true });
-      console.log(`Created directory: ${publicGamesDir}`);
+    try {
+      if (!fs.existsSync(publicGamesDir)) {
+        // Ensure parent directory exists first
+        const parentDir = path.dirname(publicGamesDir);
+        if (!fs.existsSync(parentDir)) {
+          fs.mkdirSync(parentDir, { recursive: true });
+        }
+        fs.mkdirSync(publicGamesDir, { recursive: true });
+        console.log(`Created directory: ${publicGamesDir}`);
+      }
+    } catch (error) {
+      // In serverless environments, directory creation may fail
+      // This is okay if files are stored in Firebase Storage instead
+      if (process.env.VERCEL) {
+        console.log(`Skipping local directory creation in Vercel environment: ${error.message}`);
+      } else {
+        console.warn(`Warning: Could not create public/games directory: ${error.message}`);
+      }
     }
 
     // Generate unique game directory name
