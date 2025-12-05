@@ -23,15 +23,17 @@ export const startDownload = async (req, res) => {
       title: game.title,
       game_file_id: game.game_file_id,
       downloadUrl: game.downloadUrl,
+      demoUrl: game.demoUrl,
+      websiteEntryPointUrl: game.websiteEntryPointUrl,
       fileSize: game.fileSize,
       fileName: game.fileName
     });
 
-    // Check if the game has either a game_file_id or downloadUrl
-    if (!game.game_file_id && !game.downloadUrl) {
+    // Check if the game has either a game_file_id, downloadUrl, demoUrl, or website URL
+    if (!game.game_file_id && !game.downloadUrl && !game.demoUrl && !game.websiteEntryPointUrl) {
       return res.status(400).json({
         success: false,
-        error: "This game does not have a downloadable file",
+        error: "This game does not have a downloadable file or playable URL",
       });
     }
 
@@ -49,22 +51,54 @@ export const startDownload = async (req, res) => {
 
     try {
       let downloadUrl;
+      let isWebsite = false;
       
-      // Use existing downloadUrl if available, otherwise generate one
-      if (game.downloadUrl) {
+      // Priority order: demoUrl/website URL > downloadUrl > game_file_id
+      // For web games (zip extracted), use demoUrl or websiteEntryPointUrl
+      // Check if it's a website URL (contains storage.googleapis.com and ends with .html or is a website path)
+      const isWebsiteUrl = (url) => {
+        if (!url) return false;
+        return url.includes('storage.googleapis.com') && 
+               (url.includes('/websites/') || url.toLowerCase().endsWith('.html') || url.toLowerCase().endsWith('.htm'));
+      };
+
+      if (game.demoUrl && game.demoUrl.trim() !== '' && isWebsiteUrl(game.demoUrl)) {
+        downloadUrl = game.demoUrl;
+        isWebsite = true;
+        console.log("Using demoUrl (website)");
+      } else if (game.websiteEntryPointUrl && game.websiteEntryPointUrl.trim() !== '') {
+        downloadUrl = game.websiteEntryPointUrl;
+        isWebsite = true;
+        console.log("Using websiteEntryPointUrl");
+      } else if (game.downloadUrl && game.downloadUrl.trim() !== '') {
+        // Check if downloadUrl is actually a website URL
+        if (isWebsiteUrl(game.downloadUrl)) {
+          downloadUrl = game.downloadUrl;
+          isWebsite = true;
+          console.log("Using downloadUrl (detected as website)");
+        } else {
+          downloadUrl = game.downloadUrl;
+          console.log("Using existing download URL");
+        }
         downloadUrl = game.downloadUrl;
         console.log("Using existing download URL");
-      } else {
+      } else if (game.game_file_id) {
         // Generate URL from game_file_id
         downloadUrl = await storage.getPublicUrl(game.game_file_id);
-        console.log("Generated new download URL");
+        console.log("Generated new download URL from game_file_id");
+      } else {
+        return res.status(400).json({
+          success: false,
+          error: "No download URL or file available for this game",
+        });
       }
 
       return res.status(200).json({
         success: true,
         downloadUrl,
+        isWebsite: isWebsite, // Indicates if this is a web game (playable URL) vs downloadable file
         fileSize: game.fileSize || 0,
-        fileName: game.fileName || `${game.title}.zip`,
+        fileName: game.fileName || (isWebsite ? null : `${game.title}.zip`),
         priority: downloadPriority,
         priorityMessage: priorityMessage || undefined,
       });

@@ -2,7 +2,8 @@ export const STORAGE_PATHS = {
   // GameTribe paths
   GAMES: {
     IMAGES: 'gametribe/games/images/',
-    FILES: 'gametribe/games/files/'
+    FILES: 'gametribe/games/files/',
+    WEBSITES: 'gametribe/games/websites/'
   },
   NEWS: {
     IMAGES: 'gametribe/news/images/'

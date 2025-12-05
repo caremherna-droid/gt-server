@@ -27,14 +27,37 @@ const uploadIcon = async (file, categoryId) => {
 const deleteIcon = async (iconUrl) => {
   try {
     if (!iconUrl) return;
-    
-    // Extract filename from URL
-    const urlParts = iconUrl.split('/');
-    const filename = urlParts[urlParts.length - 1].split('?')[0]; // Remove query parameters
-    const fullPath = `${STORAGE_PATHS.SPECIAL_CATEGORIES.ICONS}${filename}`;
-    
-    await storage.deleteFile(fullPath);
-    console.log(`Special category icon deleted: ${fullPath}`);
+
+    let filePath = null;
+
+    // Check if iconUrl is already a storage path (starts with storage path prefix)
+    if (iconUrl.startsWith(STORAGE_PATHS.SPECIAL_CATEGORIES.ICONS)) {
+      filePath = iconUrl;
+    } 
+    // Check if it's a full Google Storage URL
+    else if (iconUrl.includes('storage.googleapis.com')) {
+      // Extract path from URL: https://storage.googleapis.com/bucket-name/path/to/file
+      const urlParts = iconUrl.split('/');
+      const bucketIndex = urlParts.findIndex(part => part.includes('storage.googleapis.com'));
+      if (bucketIndex !== -1 && bucketIndex + 2 < urlParts.length) {
+        // Get everything after bucket name
+        filePath = urlParts.slice(bucketIndex + 2).join('/');
+      }
+    }
+    // Check if it's a public URL with path
+    else if (iconUrl.includes('/')) {
+      // Extract filename from URL
+      const urlParts = iconUrl.split("/");
+      const filename = urlParts[urlParts.length - 1].split("?")[0]; // Remove query parameters
+      filePath = `${STORAGE_PATHS.SPECIAL_CATEGORIES.ICONS}${filename}`;
+    }
+
+    if (filePath) {
+      await storage.deleteFile(filePath);
+      console.log(`Special category icon deleted: ${filePath}`);
+    } else {
+      console.warn(`Could not extract file path from icon URL: ${iconUrl}`);
+    }
   } catch (error) {
     console.error('Error deleting special category icon:', error);
     // Don't throw error - continue with deletion even if icon deletion fails
@@ -266,39 +289,78 @@ export const deleteSpecialCategory = async (req, res) => {
     }
 
     const categoryData = categoryDoc.data();
+    const deletionErrors = [];
     
     // Delete icon from storage if it exists
     if (categoryData.icon) {
-      await deleteIcon(categoryData.icon);
+      try {
+        await deleteIcon(categoryData.icon);
+      } catch (error) {
+        console.error("Error deleting special category icon:", error);
+        deletionErrors.push(`Icon deletion failed: ${error.message}`);
+      }
     }
 
     // Remove this category from all games that have it
-    const gamesSnapshot = await db.collection("games")
-      .where("specialCategories", "array-contains", id)
-      .get();
+    try {
+      const gamesSnapshot = await db.collection("games")
+        .where("specialCategories", "array-contains", id)
+        .get();
+      
+      if (!gamesSnapshot.empty) {
+        const batch = db.batch();
+        
+        gamesSnapshot.forEach(doc => {
+          const gameData = doc.data();
+          const updatedSpecialCategories = (gameData.specialCategories || []).filter(catId => catId !== id);
+          batch.update(doc.ref, { 
+            specialCategories: updatedSpecialCategories,
+            updatedAt: new Date()
+          });
+        });
+        
+        // Delete the category
+        batch.delete(categoryRef);
+        
+        await batch.commit();
+        console.log(`Removed special category ${id} from ${gamesSnapshot.size} games`);
+      } else {
+        // No games reference this category, just delete it
+        await categoryRef.delete();
+      }
+    } catch (error) {
+      console.error("Error removing special category from games:", error);
+      deletionErrors.push(`Failed to remove category from games: ${error.message}`);
+      // Still try to delete the category
+      try {
+        await categoryRef.delete();
+      } catch (deleteError) {
+        return res.status(500).json({
+          success: false,
+          error: "Failed to delete special category",
+          details: deleteError.message,
+          partialErrors: deletionErrors
+        });
+      }
+    }
     
-    const batch = db.batch();
+    console.log(`Successfully deleted special category ${id}`);
     
-    gamesSnapshot.forEach(doc => {
-      const gameData = doc.data();
-      const updatedSpecialCategories = gameData.specialCategories.filter(catId => catId !== id);
-      batch.update(doc.ref, { specialCategories: updatedSpecialCategories });
-    });
-    
-    // Delete the category
-    batch.delete(categoryRef);
-    
-    await batch.commit();
-    
+    const responseMessage = deletionErrors.length > 0
+      ? `Special category deleted successfully with warnings: ${deletionErrors.join('; ')}`
+      : "Special category deleted successfully";
+
     res.json({
       success: true,
-      message: "Special category deleted successfully"
+      message: responseMessage,
+      warnings: deletionErrors.length > 0 ? deletionErrors : undefined
     });
   } catch (error) {
     console.error("Error deleting special category:", error);
     res.status(500).json({
       success: false,
-      error: "Failed to delete special category"
+      error: "Failed to delete special category",
+      details: error.message
     });
   }
 };

@@ -29,13 +29,36 @@ const deleteIcon = async (iconUrl) => {
   try {
     if (!iconUrl) return;
 
-    // Extract filename from URL
-    const urlParts = iconUrl.split("/");
-    const filename = urlParts[urlParts.length - 1].split("?")[0]; // Remove query parameters
-    const fullPath = `${STORAGE_PATHS.CATEGORIES.ICONS}${filename}`;
+    let filePath = null;
 
-    await storage.deleteFile(fullPath);
-    console.log(`Icon deleted: ${fullPath}`);
+    // Check if iconUrl is already a storage path (starts with storage path prefix)
+    if (iconUrl.startsWith(STORAGE_PATHS.CATEGORIES.ICONS)) {
+      filePath = iconUrl;
+    } 
+    // Check if it's a full Google Storage URL
+    else if (iconUrl.includes('storage.googleapis.com')) {
+      // Extract path from URL: https://storage.googleapis.com/bucket-name/path/to/file
+      const urlParts = iconUrl.split('/');
+      const bucketIndex = urlParts.findIndex(part => part.includes('storage.googleapis.com'));
+      if (bucketIndex !== -1 && bucketIndex + 2 < urlParts.length) {
+        // Get everything after bucket name
+        filePath = urlParts.slice(bucketIndex + 2).join('/');
+      }
+    }
+    // Check if it's a public URL with path
+    else if (iconUrl.includes('/')) {
+      // Extract filename from URL
+      const urlParts = iconUrl.split("/");
+      const filename = urlParts[urlParts.length - 1].split("?")[0]; // Remove query parameters
+      filePath = `${STORAGE_PATHS.CATEGORIES.ICONS}${filename}`;
+    }
+
+    if (filePath) {
+      await storage.deleteFile(filePath);
+      console.log(`Icon deleted: ${filePath}`);
+    } else {
+      console.warn(`Could not extract file path from icon URL: ${iconUrl}`);
+    }
   } catch (error) {
     console.error("Error deleting icon:", error);
     // Don't throw error - continue with deletion even if icon deletion fails
@@ -175,7 +198,8 @@ export const updateGameCategory = async (req, res) => {
 
 export const deleteGameCategory = async (req, res) => {
   try {
-    const categoryRef = gamesCategoriesCollection.doc(req.params.id);
+    const categoryId = req.params.id;
+    const categoryRef = gamesCategoriesCollection.doc(categoryId);
     const doc = await categoryRef.get();
 
     if (!doc.exists) {
@@ -183,15 +207,54 @@ export const deleteGameCategory = async (req, res) => {
     }
 
     const categoryData = doc.data();
+    const deletionErrors = [];
 
     // Delete icon from storage if it exists
     if (categoryData.icon) {
-      await deleteIcon(categoryData.icon);
+      try {
+        await deleteIcon(categoryData.icon);
+      } catch (error) {
+        console.error("Error deleting category icon:", error);
+        deletionErrors.push(`Icon deletion failed: ${error.message}`);
+      }
     }
 
+    // Remove this category from all games that reference it
+    try {
+      const gamesSnapshot = await db.collection("games")
+        .where("category", "==", categoryId)
+        .get();
+      
+      if (!gamesSnapshot.empty) {
+        const batch = db.batch();
+        gamesSnapshot.forEach((gameDoc) => {
+          batch.update(gameDoc.ref, { 
+            category: null,
+            updatedAt: new Date()
+          });
+        });
+        await batch.commit();
+        console.log(`Removed category ${categoryId} from ${gamesSnapshot.size} games`);
+      }
+    } catch (error) {
+      console.error("Error removing category from games:", error);
+      deletionErrors.push(`Failed to remove category from games: ${error.message}`);
+    }
+
+    // Delete the category document
     await categoryRef.delete();
-    res.status(200).json({ message: "Category deleted successfully" });
+    console.log(`Successfully deleted game category ${categoryId}`);
+
+    const responseMessage = deletionErrors.length > 0
+      ? `Category deleted successfully with warnings: ${deletionErrors.join('; ')}`
+      : "Category deleted successfully";
+
+    res.status(200).json({ 
+      message: responseMessage,
+      warnings: deletionErrors.length > 0 ? deletionErrors : undefined
+    });
   } catch (error) {
+    console.error("Error deleting game category:", error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -259,16 +322,53 @@ export const updateNewsCategory = async (req, res) => {
 
 export const deleteNewsCategory = async (req, res) => {
   try {
-    const categoryRef = newsCategoriesCollection.doc(req.params.id);
+    const categoryId = req.params.id;
+    const categoryRef = newsCategoriesCollection.doc(categoryId);
     const doc = await categoryRef.get();
 
     if (!doc.exists) {
       return res.status(404).json({ message: "Category not found" });
     }
 
+    const categoryData = doc.data();
+    const deletionErrors = [];
+
+    // Remove this category from all news articles that reference it
+    try {
+      const newsSnapshot = await db.collection("news")
+        .where("category", "==", categoryId)
+        .get();
+      
+      if (!newsSnapshot.empty) {
+        const batch = db.batch();
+        newsSnapshot.forEach((newsDoc) => {
+          batch.update(newsDoc.ref, { 
+            category: null,
+            updatedAt: new Date()
+          });
+        });
+        await batch.commit();
+        console.log(`Removed category ${categoryId} from ${newsSnapshot.size} news articles`);
+      }
+    } catch (error) {
+      console.error("Error removing category from news:", error);
+      deletionErrors.push(`Failed to remove category from news: ${error.message}`);
+    }
+
+    // Delete the category document
     await categoryRef.delete();
-    res.status(200).json({ message: "Category deleted successfully" });
+    console.log(`Successfully deleted news category ${categoryId}`);
+
+    const responseMessage = deletionErrors.length > 0
+      ? `Category deleted successfully with warnings: ${deletionErrors.join('; ')}`
+      : "Category deleted successfully";
+
+    res.status(200).json({ 
+      message: responseMessage,
+      warnings: deletionErrors.length > 0 ? deletionErrors : undefined
+    });
   } catch (error) {
+    console.error("Error deleting news category:", error);
     res.status(500).json({ error: error.message });
   }
 };

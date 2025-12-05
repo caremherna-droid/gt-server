@@ -97,6 +97,33 @@ export const htmlFileUpload = multer({
   }
 });
 
+export const zipFileUpload = multer({
+  storage,
+  limits: {
+    fileSize: 500 * 1024 * 1024 // 500MB limit for zip files
+  },
+  fileFilter: (req, file, cb) => {
+    try {
+      if (!file || !file.mimetype) {
+        cb(new Error('Invalid file object'), false);
+        return;
+      }
+      
+      // Accept zip files
+      const validMimeTypes = ['application/zip', 'application/x-zip-compressed', 'application/octet-stream'];
+      const fileName = file.originalname.toLowerCase();
+      
+      if (validMimeTypes.includes(file.mimetype) || fileName.endsWith('.zip')) {
+        cb(null, true);
+      } else {
+        cb(new Error('Only ZIP files (.zip) are allowed!'), false);
+      }
+    } catch (err) {
+      cb(new Error(`File validation error: ${err.message}`), false);
+    }
+  }
+});
+
 // Improved error handler middleware for multer
 export const handleMulterError = (err, req, res, next) => {
   if (err instanceof multer.MulterError) {

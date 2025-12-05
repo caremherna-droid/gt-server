@@ -2,6 +2,10 @@ import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
 import cookieParser from "cookie-parser";
+import path from "path";
+import { fileURLToPath } from "url";
+import { dirname } from "path";
+import fs from "fs";
 import gameRoutes from "./routes/tribeRoutes/gameRoutes.js";
 import heroRoutes from "./routes/tribeRoutes/heroRoutes.js";
 import newsRoutes from "./routes/tribeRoutes/newsRoutes.js";
@@ -29,6 +33,10 @@ import gamificationRoutes from "./routes/tribeRoutes/gamificationRoutes.js";
 import { initializeNewsletterScheduler } from "./services/newsletterScheduler.js";
 // import { upload } from "./controllers/tribeControllers/uploadController.js";
 
+// Get current directory for ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
 // Load environment variables based on NODE_ENV
 if (process.env.NODE_ENV === "production") {
   dotenv.config({ path: ".env.production" });
@@ -46,7 +54,7 @@ const corsOptions = {
     const allowedOrigins = isProd
       ? [
           // Main platform URLs
-          "https://gt-server-mu.vercel.app",
+          "hhttps://gt-server-eta.vercel.app",
           "https://gametribe.com",
           // Community platform URLs
           "https://gametribe-backend.onrender.com",
@@ -124,6 +132,49 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// Create public/games directory if it doesn't exist (for local zip extraction)
+const publicGamesDir = path.join(__dirname, "public", "games");
+if (!fs.existsSync(publicGamesDir)) {
+  fs.mkdirSync(publicGamesDir, { recursive: true });
+  console.log(`Created public/games directory: ${publicGamesDir}`);
+}
+
+// Serve static files from public/games directory
+// This allows extracted zip files to be accessed via /games/ URL path
+app.use("/games", express.static(path.join(__dirname, "public", "games"), {
+  maxAge: "1y", // Cache for 1 year
+  etag: true,
+  lastModified: true,
+  setHeaders: (res, filePath) => {
+    // Set proper MIME types for common file types
+    const ext = path.extname(filePath).toLowerCase();
+    const mimeTypes = {
+      '.html': 'text/html',
+      '.htm': 'text/html',
+      '.css': 'text/css',
+      '.js': 'application/javascript',
+      '.json': 'application/json',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif',
+      '.svg': 'image/svg+xml',
+      '.ico': 'image/x-icon',
+      '.woff': 'font/woff',
+      '.woff2': 'font/woff2',
+      '.ttf': 'font/ttf',
+      '.mp3': 'audio/mpeg',
+      '.mp4': 'video/mp4',
+      '.webm': 'video/webm',
+    };
+    if (mimeTypes[ext]) {
+      res.setHeader('Content-Type', mimeTypes[ext]);
+    }
+  }
+}));
+
+console.log(`Static file serving enabled at /games/ -> ${publicGamesDir}`);
 
 // middlewares
 app.use(express.json({ limit: "250mb" }));

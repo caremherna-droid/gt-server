@@ -149,6 +149,15 @@ export const updateGame = async (req, res) => {
       updateData.fileName = req.files.game.originalname;
     }
 
+    // Handle website URL from zip upload (if provided in body)
+    // This allows setting demoUrl and downloadUrl from zip upload response
+    if (req.body.websiteEntryPointUrl && (!updateData.demoUrl || updateData.demoUrl.trim() === '')) {
+      updateData.demoUrl = req.body.websiteEntryPointUrl;
+    }
+    if (req.body.websiteEntryPointUrl && (!updateData.downloadUrl || updateData.downloadUrl.trim() === '')) {
+      updateData.downloadUrl = req.body.websiteEntryPointUrl;
+    }
+
     await gameRef.update(updateData);
 
     const updatedDoc = await gameRef.get();
@@ -166,7 +175,8 @@ export const updateGame = async (req, res) => {
 // Delete Game
 export const deleteGame = async (req, res) => {
   try {
-    const gameRef = gamesCollection.doc(req.params.id);
+    const gameId = req.params.id;
+    const gameRef = gamesCollection.doc(gameId);
     const doc = await gameRef.get();
 
     if (!doc.exists) {
@@ -174,14 +184,16 @@ export const deleteGame = async (req, res) => {
     }
 
     const gameData = doc.data();
+    const deletionErrors = [];
 
     // Delete game image from Firebase Storage if it exists
     if (gameData.public_id) {
       try {
         await storage.deleteFile(gameData.public_id);
+        console.log(`Deleted game image: ${gameData.public_id}`);
       } catch (error) {
         console.error("Error deleting game image:", error);
-        // Continue with deletion even if image deletion fails
+        deletionErrors.push(`Image deletion failed: ${error.message}`);
       }
     }
 
@@ -189,15 +201,110 @@ export const deleteGame = async (req, res) => {
     if (gameData.game_file_id) {
       try {
         await storage.deleteFile(gameData.game_file_id);
+        console.log(`Deleted game file: ${gameData.game_file_id}`);
       } catch (error) {
         console.error("Error deleting game file:", error);
-        // Continue with deletion even if file deletion fails
+        deletionErrors.push(`File deletion failed: ${error.message}`);
       }
     }
 
-    await gameRef.delete();
-    res.status(200).json({ message: "Game deleted successfully" });
+    // Delete all related data in parallel
+    let deletedCounts = {
+      comments: 0,
+      ratings: 0,
+      favorites: 0,
+      downloads: 0,
+      sessions: 0
+    };
+
+    try {
+      const batch = db.batch();
+
+      // Delete all comments for this game
+      const commentsSnapshot = await db.collection("comments")
+        .where("gameId", "==", gameId)
+        .get();
+      commentsSnapshot.forEach((commentDoc) => {
+        batch.delete(commentDoc.ref);
+      });
+      deletedCounts.comments = commentsSnapshot.size;
+      console.log(`Deleting ${deletedCounts.comments} comments for game ${gameId}`);
+
+      // Delete all ratings for this game
+      const ratingsSnapshot = await db.collection("ratings")
+        .where("gameId", "==", gameId)
+        .get();
+      ratingsSnapshot.forEach((ratingDoc) => {
+        batch.delete(ratingDoc.ref);
+      });
+      deletedCounts.ratings = ratingsSnapshot.size;
+      console.log(`Deleting ${deletedCounts.ratings} ratings for game ${gameId}`);
+
+      // Delete all favorites for this game
+      const favoritesSnapshot = await db.collection("favorites")
+        .where("gameId", "==", gameId)
+        .get();
+      favoritesSnapshot.forEach((favoriteDoc) => {
+        batch.delete(favoriteDoc.ref);
+      });
+      deletedCounts.favorites = favoritesSnapshot.size;
+      console.log(`Deleting ${deletedCounts.favorites} favorites for game ${gameId}`);
+
+      // Delete all download history for this game
+      const downloadsSnapshot = await db.collection("downloadHistory")
+        .where("gameId", "==", gameId)
+        .get();
+      downloadsSnapshot.forEach((downloadDoc) => {
+        batch.delete(downloadDoc.ref);
+      });
+      deletedCounts.downloads = downloadsSnapshot.size;
+      console.log(`Deleting ${deletedCounts.downloads} download records for game ${gameId}`);
+
+      // Delete all game sessions for this game
+      const sessionsSnapshot = await db.collection("gameSessions")
+        .where("gameId", "==", gameId)
+        .get();
+      sessionsSnapshot.forEach((sessionDoc) => {
+        batch.delete(sessionDoc.ref);
+      });
+      deletedCounts.sessions = sessionsSnapshot.size;
+      console.log(`Deleting ${deletedCounts.sessions} game sessions for game ${gameId}`);
+
+      // Delete the game document itself
+      batch.delete(gameRef);
+
+      // Commit all deletions
+      await batch.commit();
+      console.log(`Successfully deleted game ${gameId} and all related data`);
+    } catch (error) {
+      console.error("Error deleting related data:", error);
+      deletionErrors.push(`Related data deletion failed: ${error.message}`);
+      // Still try to delete the game document
+      try {
+        await gameRef.delete();
+      } catch (deleteError) {
+        return res.status(500).json({ 
+          error: "Failed to delete game",
+          details: deleteError.message,
+          partialErrors: deletionErrors
+        });
+      }
+    }
+
+    const responseMessage = deletionErrors.length > 0
+      ? `Game deleted successfully with some warnings: ${deletionErrors.join('; ')}`
+      : "Game deleted successfully";
+
+    res.status(200).json({ 
+      message: responseMessage,
+      deleted: {
+        game: true,
+        ...deletedCounts
+      },
+      warnings: deletionErrors.length > 0 ? deletionErrors : undefined
+    });
   } catch (error) {
+    console.error("Error deleting game:", error);
     res.status(500).json({ error: error.message });
   }
 };

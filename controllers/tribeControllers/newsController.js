@@ -123,7 +123,8 @@ export const updateNews = async (req, res) => {
 // delete News
 export const deleteNews = async (req, res) => {
   try {
-    const newsRef = newsCollection.doc(req.params.id);
+    const newsId = req.params.id;
+    const newsRef = newsCollection.doc(newsId);
     const doc = await newsRef.get();
 
     if (!doc.exists) {
@@ -131,20 +132,34 @@ export const deleteNews = async (req, res) => {
     }
 
     const newsData = doc.data();
+    const deletionErrors = [];
 
     // Delete news image from Firebase Storage if it exists
     if (newsData.public_id) {
       try {
         await storage.deleteFile(newsData.public_id);
+        console.log(`Deleted news image: ${newsData.public_id}`);
       } catch (error) {
         console.error("Error deleting news image:", error);
+        deletionErrors.push(`Image deletion failed: ${error.message}`);
         // Continue with the news deletion even if image deletion fails
       }
     }
 
+    // Delete the news document
     await newsRef.delete();
-    res.status(200).json({ message: "News deleted successfully" });
+    console.log(`Successfully deleted news ${newsId}`);
+
+    const responseMessage = deletionErrors.length > 0
+      ? `News deleted successfully with warnings: ${deletionErrors.join('; ')}`
+      : "News deleted successfully";
+
+    res.status(200).json({ 
+      message: responseMessage,
+      warnings: deletionErrors.length > 0 ? deletionErrors : undefined
+    });
   } catch (error) {
+    console.error("Error deleting news:", error);
     res.status(500).json({ error: error.message });
   }
 };
