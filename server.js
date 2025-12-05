@@ -134,45 +134,69 @@ app.use((req, res, next) => {
 });
 
 // Create public/games directory if it doesn't exist (for local zip extraction)
+// Note: In serverless environments (like Vercel), filesystem is read-only except /tmp
+// This directory is mainly for development/local use
 const publicGamesDir = path.join(__dirname, "public", "games");
-if (!fs.existsSync(publicGamesDir)) {
-  fs.mkdirSync(publicGamesDir, { recursive: true });
-  console.log(`Created public/games directory: ${publicGamesDir}`);
+try {
+  if (!fs.existsSync(publicGamesDir)) {
+    // Ensure parent directory exists first
+    const parentDir = path.dirname(publicGamesDir);
+    if (!fs.existsSync(parentDir)) {
+      fs.mkdirSync(parentDir, { recursive: true });
+    }
+    fs.mkdirSync(publicGamesDir, { recursive: true });
+    console.log(`Created public/games directory: ${publicGamesDir}`);
+  }
+} catch (error) {
+  // In serverless environments, directory creation may fail
+  // This is okay if files are stored in Firebase Storage instead
+  if (process.env.VERCEL) {
+    console.log(
+      `Skipping local directory creation in Vercel environment: ${error.message}`
+    );
+  } else {
+    console.warn(
+      `Warning: Could not create public/games directory: ${error.message}`
+    );
+  }
 }
 
 // Serve static files from public/games directory
 // This allows extracted zip files to be accessed via /games/ URL path
-app.use("/games", express.static(path.join(__dirname, "public", "games"), {
-  maxAge: "1y", // Cache for 1 year
-  etag: true,
-  lastModified: true,
-  setHeaders: (res, filePath) => {
-    // Set proper MIME types for common file types
-    const ext = path.extname(filePath).toLowerCase();
-    const mimeTypes = {
-      '.html': 'text/html',
-      '.htm': 'text/html',
-      '.css': 'text/css',
-      '.js': 'application/javascript',
-      '.json': 'application/json',
-      '.png': 'image/png',
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.gif': 'image/gif',
-      '.svg': 'image/svg+xml',
-      '.ico': 'image/x-icon',
-      '.woff': 'font/woff',
-      '.woff2': 'font/woff2',
-      '.ttf': 'font/ttf',
-      '.mp3': 'audio/mpeg',
-      '.mp4': 'video/mp4',
-      '.webm': 'video/webm',
-    };
-    if (mimeTypes[ext]) {
-      res.setHeader('Content-Type', mimeTypes[ext]);
-    }
-  }
-}));
+app.use(
+  "/games",
+  express.static(path.join(__dirname, "public", "games"), {
+    maxAge: "1y", // Cache for 1 year
+    etag: true,
+    lastModified: true,
+    setHeaders: (res, filePath) => {
+      // Set proper MIME types for common file types
+      const ext = path.extname(filePath).toLowerCase();
+      const mimeTypes = {
+        ".html": "text/html",
+        ".htm": "text/html",
+        ".css": "text/css",
+        ".js": "application/javascript",
+        ".json": "application/json",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".svg": "image/svg+xml",
+        ".ico": "image/x-icon",
+        ".woff": "font/woff",
+        ".woff2": "font/woff2",
+        ".ttf": "font/ttf",
+        ".mp3": "audio/mpeg",
+        ".mp4": "video/mp4",
+        ".webm": "video/webm",
+      };
+      if (mimeTypes[ext]) {
+        res.setHeader("Content-Type", mimeTypes[ext]);
+      }
+    },
+  })
+);
 
 console.log(`Static file serving enabled at /games/ -> ${publicGamesDir}`);
 
